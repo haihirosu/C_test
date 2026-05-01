@@ -1027,6 +1027,7 @@ body {
 
 .help-modal-card {
   width: min(760px, 100%);
+  max-height: 80vh;
   padding: 16px;
 }
 
@@ -1063,8 +1064,8 @@ body {
 
 .player-setup-row {
   display: grid;
-  grid-template-columns: 130px 100px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: auto 84px minmax(0, 1fr);
+  gap: 8px;
   align-items: center;
   padding: 10px;
   border: 1px solid #e5e7eb;
@@ -1075,10 +1076,11 @@ body {
 .player-setup-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-size: 13px;
   font-weight: bold;
   color: #0f172a;
+  white-space: nowrap;
 }
 
 .player-setup-select,
@@ -1094,10 +1096,46 @@ body {
   box-sizing: border-box;
 }
 
+.player-setup-select {
+  padding: 0 8px;
+}
+
+.player-setup-input {
+  min-width: 0;
+}
+
 .robber-steal-actions {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+@media (max-width: 768px) {
+  .help-modal-card {
+    max-height: 80vh;
+  }
+
+  .player-setup-modal-card {
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+
+  .player-setup-row {
+    grid-template-columns: auto 76px minmax(0, 1fr);
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .player-setup-title {
+    font-size: 12px;
+    gap: 4px;
+  }
+
+  .player-setup-select,
+  .player-setup-input {
+    min-height: 36px;
+    font-size: 12px;
+  }
 }
 
 .robber-steal-btn {
@@ -2385,6 +2423,31 @@ body {
         renderMobilePanelState();
     }
 
+    // 役割: 下部操作パネルを部分再描画した後に、現在の開閉状態を即座に再反映する
+    function reapplyMobileControlPanelState() {
+        renderMobilePanelState();
+        requestAnimationFrame(() => {
+            renderMobilePanelState();
+        });
+    }
+
+    // 役割: 下部スライドパネル内の通常操作が、開閉トグル側へ伝播しないよう共通ガードを張る
+    function bindMobileControlPanelInteractionGuards(container) {
+        if (!container) return;
+
+        const stopMobilePanelPropagation = (event) => event.stopPropagation();
+        container.querySelectorAll(".mobile-slide-panel").forEach((panel) => {
+            panel.addEventListener("click", stopMobilePanelPropagation);
+            panel.addEventListener("touchstart", stopMobilePanelPropagation, { passive: true });
+        });
+        container.querySelectorAll(
+            '.mobile-slide-panel button:not([data-action="close-mobile-control-panel"]), .mobile-slide-panel input, .mobile-slide-panel select, .mobile-slide-panel textarea, .mobile-slide-panel label, .mobile-slide-panel a'
+        ).forEach((node) => {
+            node.addEventListener("click", stopMobilePanelPropagation);
+            node.addEventListener("touchstart", stopMobilePanelPropagation, { passive: true });
+        });
+    }
+
     // 役割: ヘッダー直下の ID確認ステータスバーを描画する
     // 使用: renderAll 時、ID更新時、ID確認モード切替時
     // 入出力: 引数なしで、最後に触ったIDと ID確認モード状態を DOM に反映する
@@ -2431,6 +2494,82 @@ body {
     // 役割: hover 終了時にも最後に触ったID表示を維持したまま UI を再描画する
     function clearHoveredBoardIdDisplay() {
         renderInspectStatusBar();
+    }
+
+    // 役割: 盤面タップを即時処理したいタッチ系入力環境かどうかを返す
+    function usesDirectBoardTapActivation() {
+        return window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0;
+    }
+
+    // 役割: 盤面 hover による ID 確認を有効にするマウス環境かどうかを返す
+    function supportsBoardHoverPreview() {
+        return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    }
+
+    // 役割: hex / edge / vertex の入力入口を共通化し、ID更新と本処理呼び出しを分岐する
+    // 使用: renderBoard 内の盤面 hit 要素の click / tap 時
+    // 入出力: type, id, event を受け取り、LastID を更新して必要なら既存の handleXxxClick を呼ぶ
+    // 関連: addBoardActivateListener / setHoveredBoardIdDisplay / handleHexClick / handleEdgeClick / handleVertexClick
+    function handleBoardTargetActivate(type, id, event) {
+        if (event) {
+            event.stopPropagation?.();
+            if (event.type !== "click") {
+                event.preventDefault?.();
+            }
+        }
+
+        const label = type === "hex"
+            ? "Hex"
+            : type === "edge"
+                ? "Edge"
+                : "Vertex";
+        setHoveredBoardIdDisplay(label, id);
+
+        if (inspectModeState.active) {
+            return;
+        }
+
+        if (type === "hex") {
+            handleHexClick(id);
+            return;
+        }
+        if (type === "edge") {
+            handleEdgeClick(id);
+            return;
+        }
+        handleVertexClick(id);
+    }
+
+    // 役割: 盤面 hit 要素に、入力環境に応じた hover / click / tap の入口を付与する
+    // 使用: renderBoard で hex / edge / vertex の hit 要素を作った直後
+    // 入出力: element, type, id を受け取り、PC は hover + click、タッチ系は pointerup/touchend を設定する
+    // 関連: handleBoardTargetActivate / usesDirectBoardTapActivation / supportsBoardHoverPreview
+    function addBoardActivateListener(element, type, id) {
+        if (!element) return;
+
+        const label = type === "hex"
+            ? "Hex"
+            : type === "edge"
+                ? "Edge"
+                : "Vertex";
+        const activate = (event) => handleBoardTargetActivate(type, id, event);
+        element.style.touchAction = "manipulation";
+
+        if (supportsBoardHoverPreview()) {
+            element.addEventListener("mouseenter", () => setHoveredBoardIdDisplay(label, id));
+            element.addEventListener("mouseleave", clearHoveredBoardIdDisplay);
+        }
+
+        if (usesDirectBoardTapActivation()) {
+            if (typeof window.PointerEvent === "function") {
+                element.addEventListener("pointerup", activate);
+            } else {
+                element.addEventListener("touchend", activate, { passive: false });
+            }
+            return;
+        }
+
+        element.addEventListener("click", activate);
     }
 
     // 役割: 右カラム表示用に最善手の概要文字列を組み立てる
@@ -3673,15 +3812,7 @@ function renderPorts(portLayer) {
             "data-hex-id": hex.id,
             class: isRobberMoveActive && !isCurrentRobberHex ? "hex-hit robber-hit-active" : "hex-hit"
         });
-        hexHit.addEventListener("mouseenter", () => setHoveredBoardIdDisplay("Hex", hex.id));
-        hexHit.addEventListener("mouseleave", clearHoveredBoardIdDisplay);
-        hexHit.addEventListener("click", () => {
-            setHoveredBoardIdDisplay("Hex", hex.id);
-            if (inspectModeState.active) {
-                return;
-            }
-            handleHexClick(hex.id);
-        });
+        addBoardActivateListener(hexHit, "hex", hex.id);
         hexLayer.appendChild(hexHit);
 
         // const label = createSvgEl("text", {
@@ -3779,15 +3910,7 @@ function renderPorts(portLayer) {
         class: "edge-hit",
         "data-edge-id": edge.id
       });
-      hit.addEventListener("mouseenter", () => setHoveredBoardIdDisplay("Edge", edge.id));
-      hit.addEventListener("mouseleave", clearHoveredBoardIdDisplay);
-      hit.addEventListener("click", () => {
-        setHoveredBoardIdDisplay("Edge", edge.id);
-        if (inspectModeState.active) {
-          return;
-        }
-        handleEdgeClick(edge.id);
-      });
+      addBoardActivateListener(hit, "edge", edge.id);
       edgeLayer.appendChild(hit);
     });
 
@@ -3850,15 +3973,7 @@ function renderPorts(portLayer) {
         class: "vertex-hit",
         "data-vertex-id": vertex.id
       });
-      hit.addEventListener("mouseenter", () => setHoveredBoardIdDisplay("Vertex", vertex.id));
-      hit.addEventListener("mouseleave", clearHoveredBoardIdDisplay);
-      hit.addEventListener("click", () => {
-        setHoveredBoardIdDisplay("Vertex", vertex.id);
-        if (inspectModeState.active) {
-          return;
-        }
-        handleVertexClick(vertex.id);
-      });
+      addBoardActivateListener(hit, "vertex", vertex.id);
       vertexLayer.appendChild(hit);
     });
 
@@ -3948,15 +4063,21 @@ function renderPorts(portLayer) {
             </div>
         `;
 
-        document.getElementById("rollDiceBtn").addEventListener("click", rollDice);
-        document.getElementById("distributeBtn").addEventListener("click", distributeResourcesForCurrentRoll);
-        area.querySelectorAll(".mobile-slide-panel").forEach((panel) => {
-            panel.addEventListener("click", (event) => event.stopPropagation());
-            panel.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
-        });
+        const rollDiceBtn = document.getElementById("rollDiceBtn");
+        if (rollDiceBtn) {
+            rollDiceBtn.addEventListener("click", rollDice);
+        }
+        const distributeBtn = document.getElementById("distributeBtn");
+        if (distributeBtn) {
+            distributeBtn.addEventListener("click", distributeResourcesForCurrentRoll);
+        }
         area.querySelectorAll('[data-action="close-mobile-control-panel"]').forEach((btn) => {
+            btn.addEventListener("click", (event) => event.stopPropagation());
+            btn.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
             btn.addEventListener("click", closeMobileControlPanel);
         });
+        bindMobileControlPanelInteractionGuards(area);
+        reapplyMobileControlPanelState();
     }
 
     // 役割: 右カラムの参照エリアを描画またはクリアする
@@ -4072,13 +4193,13 @@ function renderPorts(portLayer) {
         if (initialPlacementBtn) {
             initialPlacementBtn.addEventListener("click", showInitialPlacementRecommendationForCurrentPlayer);
         }
-        area.querySelectorAll(".mobile-slide-panel").forEach((panel) => {
-            panel.addEventListener("click", (event) => event.stopPropagation());
-            panel.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
-        });
         area.querySelectorAll('[data-action="close-mobile-control-panel"]').forEach((btn) => {
+            btn.addEventListener("click", (event) => event.stopPropagation());
+            btn.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
             btn.addEventListener("click", closeMobileControlPanel);
         });
+        bindMobileControlPanelInteractionGuards(area);
+        reapplyMobileControlPanelState();
     }
 
     // 役割: ヘルプモーダルの説明本文を組み立てる
@@ -4607,7 +4728,7 @@ function renderPorts(portLayer) {
       }
     },
     road: {
-      finalMultiplier: 2,
+      finalMultiplier: 4,//2->4に増加、評価を試す
       extensionFromRoadBonus: 2,
       networkConnectionBonus: 3
     },

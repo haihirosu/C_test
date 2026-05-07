@@ -1239,6 +1239,23 @@ body {
   vector-effect: non-scaling-stroke;
 }
 
+.initial-placement-edge-highlight {
+  stroke: rgba(250, 204, 21, 0.95);
+  stroke-width: 12;
+  stroke-linecap: round;
+  opacity: 0.9;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.initial-placement-vertex-highlight {
+  fill: rgba(59, 130, 246, 0.16);
+  stroke: rgba(59, 130, 246, 0.95);
+  stroke-width: 6;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
 .robber-targetable {
   stroke: #0f172a;
   stroke-width: 4;
@@ -3412,11 +3429,61 @@ body {
         window.alert(result.message || `CPU自動実行を行いました: ${savedAction.actionType}`);
     }
 
+    // 役割: 初期配置候補ハイライト用の一時 SVG レイヤーを取り除く
+    function clearInitialPlacementHighlightLayer() {
+        const svg = document.getElementById("board");
+        if (!svg) return;
+        svg.querySelector("#initial-placement-highlight-layer")?.remove();
+    }
+
+    // 役割: 初期配置検討で選ばれた vertex / edge を現在の盤面 SVG に一時ハイライトする
+    function showInitialPlacementHighlight(vertexId, edgeId = null) {
+        const svg = document.getElementById("board");
+        if (!svg || !boardData) return;
+
+        clearInitialPlacementHighlightLayer();
+
+        const vertex = boardData.vertices.find((item) => item.id === vertexId);
+        const edge = edgeId === null ? null : boardData.edges.find((item) => item.id === edgeId);
+        if (!vertex && !edge) {
+            return;
+        }
+
+        const highlightLayer = createSvgEl("g", {
+            id: "initial-placement-highlight-layer",
+            "pointer-events": "none"
+        });
+
+        if (edge) {
+            const edgeHighlight = createSvgEl("line", {
+                x1: edge.x1,
+                y1: edge.y1,
+                x2: edge.x2,
+                y2: edge.y2,
+                class: "initial-placement-edge-highlight"
+            });
+            highlightLayer.appendChild(edgeHighlight);
+        }
+
+        if (vertex) {
+            const vertexHighlight = createSvgEl("circle", {
+                cx: vertex.x,
+                cy: vertex.y,
+                r: 18,
+                class: "initial-placement-vertex-highlight"
+            });
+            highlightLayer.appendChild(vertexHighlight);
+        }
+
+        svg.appendChild(highlightLayer);
+    }
+
     // 役割: 今この盤面で初期配置するなら最善の vertex / edge を表示する
     // 使用: 「初期配置検討」ボタン押下時
     // 入出力: 引数なしで、最善頂点と edge を alert と console に出す
     // 関連: buildInitialPlacementVertexCandidatesForPlayer / getBestInitialPlacementVertexForPlayer / getBestInitialPlacementEdgeForPlayer
     function showInitialPlacementRecommendationForCurrentPlayer() {
+        clearInitialPlacementHighlightLayer();
         const activePlayer = getCurrentPlayer();
         if (!activePlayer) {
             window.alert("初期配置候補を計算できませんでした");
@@ -3440,6 +3507,8 @@ body {
         console.log(`[CatanCPU] best initial placement vertex for player ${activePlayer.id}`, bestInitialVertex);
         console.log(`[CatanCPU] initial placement edge candidates for player ${activePlayer.id}`, edgeCandidates);
         console.log(`[CatanCPU] best initial placement edge for player ${activePlayer.id}`, bestInitialEdge);
+
+        showInitialPlacementHighlight(bestVertexId, bestInitialEdge ? getEdgeIdFromActionTarget(bestInitialEdge.targetId) : null);
 
         window.alert(
             [

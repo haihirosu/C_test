@@ -1722,6 +1722,7 @@ body {
     action: null,
     statusText: ""
   };
+  let lastSuggestedCpuAction = null;
   let playerSetupModalState = {
     active: false,
     playerConfigs: []
@@ -1987,7 +1988,8 @@ body {
         return createNewGameStateWithPlayerConfigs(boardData, null);
     }
   // 役割: 現在の gameState を localStorage へ保存する
-  function saveGame() {
+  function saveGame(reason = "state updated") {
+    clearLastSuggestedCpuAction(reason);
     if (APP_CONFIG.STORAGE_MODE !== "localStorage") {
       return;
     }
@@ -2022,6 +2024,142 @@ body {
   // 役割: gameState.players からプレイヤーを id 検索する
   function getPlayerById(playerId) {
     return gameState.players.find(p => p.id === playerId) || null;
+  }
+
+  // 役割: 資源キーが既存の資源種別かどうかを判定する
+  function isValidResourceKey(resourceKey) {
+    return RESOURCE_KEYS.includes(resourceKey);
+  }
+
+  // 役割: 資源増減配列を事前検証し、全件 OK の時だけ一括反映する
+  // 使用: 将来の CPU 自動実行で、建設コスト・銀行交換・カード効果などをまとめて適用する時
+  // 入出力: [{ playerId, resource, amount }] を受け取り、成功/失敗結果オブジェクトを返す
+  // 関連: RESOURCE_KEYS / getPlayerById / clearLastSuggestedCpuAction
+  function applyResourceChanges(changes, options = {}) {
+    if (!Array.isArray(changes)) {
+      return {
+        ok: false,
+        reason: "invalid_changes",
+        detail: { changes }
+      };
+    }
+
+    const normalizedChanges = [];
+
+    for (let index = 0; index < changes.length; index += 1) {
+      const change = changes[index];
+      if (!change || typeof change !== "object") {
+        return {
+          ok: false,
+          reason: "invalid_changes",
+          detail: { index, change }
+        };
+      }
+
+      const playerId = Number(change.playerId);
+      if (!Number.isInteger(playerId)) {
+        return {
+          ok: false,
+          reason: "player_not_found",
+          detail: { index, change }
+        };
+      }
+
+      const player = getPlayerById(playerId);
+      if (!player) {
+        return {
+          ok: false,
+          reason: "player_not_found",
+          detail: { index, playerId, change }
+        };
+      }
+
+      const resource = change.resource;
+      if (!isValidResourceKey(resource)) {
+        return {
+          ok: false,
+          reason: "invalid_resource",
+          detail: { index, playerId, resource, change }
+        };
+      }
+
+      const amount = Number(change.amount);
+      if (!Number.isFinite(amount)) {
+        return {
+          ok: false,
+          reason: "invalid_amount",
+          detail: { index, playerId, resource, amount: change.amount, change }
+        };
+      }
+
+      normalizedChanges.push({ playerId, resource, amount });
+    }
+
+    const netAmountByPlayerResource = new Map();
+    normalizedChanges.forEach(({ playerId, resource, amount }) => {
+      const key = `${playerId}:${resource}`;
+      netAmountByPlayerResource.set(key, (netAmountByPlayerResource.get(key) || 0) + amount);
+    });
+
+    for (const [key, netAmount] of netAmountByPlayerResource.entries()) {
+      if (netAmount >= 0) {
+        continue;
+      }
+
+      const [playerIdRaw, resource] = key.split(":");
+      const playerId = Number(playerIdRaw);
+      const player = getPlayerById(playerId);
+      const currentAmount = Number(player?.resources?.[resource] ?? 0);
+      const requiredAmount = Math.abs(netAmount);
+
+      if (!player) {
+        return {
+          ok: false,
+          reason: "player_not_found",
+          detail: { playerId, resource, netAmount }
+        };
+      }
+
+      if (currentAmount + netAmount < 0) {
+        return {
+          ok: false,
+          reason: "resource_shortage",
+          detail: {
+            playerId,
+            resource,
+            currentAmount,
+            requiredAmount,
+            netAmount
+          }
+        };
+      }
+    }
+
+    if (options.dryRun) {
+      return {
+        ok: true,
+        applied: normalizedChanges,
+        dryRun: true,
+        options
+      };
+    }
+
+    clearLastSuggestedCpuAction("resource changes applied");
+
+    normalizedChanges.forEach(({ playerId, resource, amount }) => {
+      const player = getPlayerById(playerId);
+      if (!player) return;
+      if (typeof player.resources[resource] !== "number") {
+        player.resources[resource] = 0;
+      }
+      player.resources[resource] = Math.max(0, player.resources[resource] + amount);
+    });
+
+    return {
+      ok: true,
+      applied: normalizedChanges,
+      options
+    };
   }
 
     // 役割: 発展カード type から表示定義を返す
@@ -2189,6 +2327,47 @@ body {
     function toggleLegalHighlights() {
         legalHighlightState.active = !legalHighlightState.active;
         renderAll();
+    }
+
+    // 役割: 直前に表示した CPU 最善手の一時保存状態を消す
+    function clearLastSuggestedCpuAction(reason = "") {
+        if (!lastSuggestedCpuAction) {
+            return;
+        }
+        if (reason) {
+            console.log("[CatanCPU] cleared last suggested action", {
+                reason,
+                playerId: lastSuggestedCpuAction.playerId,
+                actionType: lastSuggestedCpuAction.actionType,
+                score: lastSuggestedCpuAction.score
+            });
+        }
+        lastSuggestedCpuAction = null;
+    }
+
+    // 役割: CPU最善手表示で得た action を UI 用の一時状態へ保存する
+    function storeLastSuggestedCpuAction(playerId, action) {
+        if (!action || !action.actionType) {
+            clearLastSuggestedCpuAction("no suggested action");
+            return;
+        }
+
+        lastSuggestedCpuAction = {
+            playerId,
+            action,
+            actionType: action.actionType,
+            score: typeof action.score === "number" ? action.score : null,
+            turn: gameState.currentTurn || 1,
+            savedAt: new Date().toISOString()
+        };
+
+        console.log("[CatanCPU] saved suggested action", {
+            playerId: lastSuggestedCpuAction.playerId,
+            actionType: lastSuggestedCpuAction.actionType,
+            score: lastSuggestedCpuAction.score,
+            turn: lastSuggestedCpuAction.turn,
+            action: lastSuggestedCpuAction.action
+        });
     }
 
     // 役割: 右カラムの CPU 最善手表示状態をクリアする
@@ -2654,6 +2833,7 @@ body {
         const activePlayer = getCurrentPlayer();
         if (!activePlayer) {
             clearCpuBestActionDisplay();
+            clearLastSuggestedCpuAction("no active player");
             renderFuturePanel();
             window.alert("実行可能な候補なし");
             return;
@@ -2673,6 +2853,7 @@ body {
 
             console.log(`[CatanCPU] robber candidates for player ${robberPlayer.id}`, robberCandidates);
             console.log(`[CatanCPU] best robber candidate for player ${robberPlayer.id}`, bestRobberCandidate);
+            storeLastSuggestedCpuAction(robberPlayer.id, bestRobberCandidate);
             renderFuturePanel();
             window.alert(formatBestActionAlertText(bestRobberCandidate));
             return;
@@ -2687,8 +2868,548 @@ body {
             : `${activePlayer.name} / 実行可能な候補なし`;
 
         console.log(`[CatanCPU] best action for player ${activePlayer.id}`, bestAction);
+        storeLastSuggestedCpuAction(activePlayer.id, bestAction);
         renderFuturePanel();
         window.alert(formatBestActionAlertText(bestAction));
+    }
+
+    // 役割: action.targetId から edgeId を取り出す
+    function getEdgeIdFromActionTarget(targetId) {
+        if (typeof targetId !== "string" || !targetId.startsWith("e")) {
+            return null;
+        }
+
+        const edgeId = Number(targetId.slice(1));
+        return Number.isInteger(edgeId) ? edgeId : null;
+    }
+
+    // 役割: action.targetId から vertexId を取り出す
+    function getVertexIdFromActionTarget(targetId) {
+        if (typeof targetId !== "string" || !targetId.startsWith("v")) {
+            return null;
+        }
+
+        const vertexId = Number(targetId.slice(1));
+        return Number.isInteger(vertexId) ? vertexId : null;
+    }
+
+    // 役割: action.targetId から hexId を取り出す
+    function getHexIdFromActionTarget(targetId) {
+        if (typeof targetId === "number") {
+            return Number.isInteger(targetId) ? targetId : null;
+        }
+
+        if (typeof targetId !== "string" || !targetId.startsWith("h")) {
+            return null;
+        }
+
+        const hexId = Number(targetId.slice(1));
+        return Number.isInteger(hexId) ? hexId : null;
+    }
+
+    // 役割: {resource, amount} 配列を applyResourceChanges 用の change 配列へ変換する
+    function buildResourceChangesFromItems(playerId, items = [], direction = 1) {
+        if (!Array.isArray(items)) {
+            return [];
+        }
+
+        return items
+            .filter((item) => item && item.resource && Number.isFinite(Number(item.amount)))
+            .map((item) => ({
+                playerId,
+                resource: item.resource,
+                amount: Number(item.amount) * direction
+            }));
+    }
+
+    // 役割: 資源変更を dry-run 検証だけ行う
+    function canApplyResourceChanges(changes, options = {}) {
+        return applyResourceChanges(changes, { ...options, dryRun: true });
+    }
+
+    // 役割: 指定種別の発展カードを 1 枚だけ未使用から使用済みへ移す
+    function markDevelopmentCardUsed(playerId, cardType) {
+        const player = getPlayerById(playerId);
+        if (!player) {
+            return {
+                ok: false,
+                reason: "player_not_found",
+                detail: { playerId, cardType }
+            };
+        }
+
+        const cardIndex = player.developmentCards.findIndex((card) => (
+            card
+            && card.type === cardType
+            && card.drawnTurn !== gameState.currentTurn
+        ));
+
+        if (cardIndex < 0) {
+            return {
+                ok: false,
+                reason: "card_not_found",
+                detail: { playerId, cardType }
+            };
+        }
+
+        const [card] = player.developmentCards.splice(cardIndex, 1);
+        player.usedDevelopmentCards.push(card);
+        player.usedDevCardThisTurn = true;
+
+        return {
+            ok: true,
+            card
+        };
+    }
+
+    // 役割: CPU 用に道路建設を 1 本反映する
+    function executeCpuBuildRoad(action, playerId) {
+        const player = getPlayerById(playerId);
+        const edgeId = getEdgeIdFromActionTarget(action?.targetId);
+        const edgeState = edgeId !== null ? gameState.boardState.edgeStates[edgeId] : null;
+        const costChanges = [
+            { playerId, resource: "wood", amount: -1 },
+            { playerId, resource: "brick", amount: -1 }
+        ];
+
+        if (!player) {
+            return { ok: false, reason: "player_not_found", message: "プレイヤーが見つかりません" };
+        }
+        if (edgeId === null || !edgeState) {
+            return { ok: false, reason: "invalid_target", message: "道路の対象 edge が不正です" };
+        }
+        if (edgeState.ownerPlayerId !== null) {
+            return { ok: false, reason: "edge_occupied", message: "その edge にはすでに道路があります" };
+        }
+        if (player.remainingPieces.roads <= 0) {
+            return { ok: false, reason: "no_road_piece", message: "道路コマが残っていません" };
+        }
+
+        const precheck = canApplyResourceChanges(costChanges, { actionType: action.actionType });
+        if (!precheck.ok) {
+            return { ok: false, reason: precheck.reason, detail: precheck.detail, message: "資源が足りないため道路を建設できません" };
+        }
+
+        edgeState.ownerPlayerId = playerId;
+        player.remainingPieces.roads -= 1;
+        const applyResult = applyResourceChanges(costChanges, { actionType: action.actionType });
+        if (!applyResult.ok) {
+            return { ok: false, reason: applyResult.reason, detail: applyResult.detail, message: "資源反映に失敗したため道路建設を中止しました" };
+        }
+
+        saveGame(`cpu execute ${action.actionType}`);
+        renderAll();
+        return { ok: true, actionType: action.actionType, message: `${player.name} が道路 ${action.targetId} を建設しました` };
+    }
+
+    // 役割: CPU 用に開拓地建設を 1 件反映する
+    function executeCpuBuildSettlement(action, playerId) {
+        const player = getPlayerById(playerId);
+        const vertexId = getVertexIdFromActionTarget(action?.targetId);
+        const vertexState = vertexId !== null ? gameState.boardState.vertexStates[vertexId] : null;
+        const costChanges = [
+            { playerId, resource: "wood", amount: -1 },
+            { playerId, resource: "brick", amount: -1 },
+            { playerId, resource: "sheep", amount: -1 },
+            { playerId, resource: "wheat", amount: -1 }
+        ];
+
+        if (!player) {
+            return { ok: false, reason: "player_not_found", message: "プレイヤーが見つかりません" };
+        }
+        if (vertexId === null || !vertexState) {
+            return { ok: false, reason: "invalid_target", message: "開拓地の対象 vertex が不正です" };
+        }
+        if (vertexState.ownerPlayerId !== null || vertexState.buildingType !== null) {
+            return { ok: false, reason: "vertex_occupied", message: "その vertex にはすでに建物があります" };
+        }
+        if (player.remainingPieces.settlements <= 0) {
+            return { ok: false, reason: "no_settlement_piece", message: "開拓地コマが残っていません" };
+        }
+
+        const precheck = canApplyResourceChanges(costChanges, { actionType: action.actionType });
+        if (!precheck.ok) {
+            return { ok: false, reason: precheck.reason, detail: precheck.detail, message: "資源が足りないため開拓地を建設できません" };
+        }
+
+        vertexState.ownerPlayerId = playerId;
+        vertexState.buildingType = "settlement";
+        player.remainingPieces.settlements -= 1;
+        recomputePoints();
+        const applyResult = applyResourceChanges(costChanges, { actionType: action.actionType });
+        if (!applyResult.ok) {
+            return { ok: false, reason: applyResult.reason, detail: applyResult.detail, message: "資源反映に失敗したため開拓地建設を中止しました" };
+        }
+
+        saveGame(`cpu execute ${action.actionType}`);
+        renderAll();
+        return { ok: true, actionType: action.actionType, message: `${player.name} が開拓地 ${action.targetId} を建設しました` };
+    }
+
+    // 役割: CPU 用に都市化を 1 件反映する
+    function executeCpuBuildCity(action, playerId) {
+        const player = getPlayerById(playerId);
+        const vertexId = getVertexIdFromActionTarget(action?.targetId);
+        const vertexState = vertexId !== null ? gameState.boardState.vertexStates[vertexId] : null;
+        const costChanges = [
+            { playerId, resource: "wheat", amount: -2 },
+            { playerId, resource: "ore", amount: -3 }
+        ];
+
+        if (!player) {
+            return { ok: false, reason: "player_not_found", message: "プレイヤーが見つかりません" };
+        }
+        if (vertexId === null || !vertexState) {
+            return { ok: false, reason: "invalid_target", message: "都市化の対象 vertex が不正です" };
+        }
+        if (vertexState.ownerPlayerId !== playerId || vertexState.buildingType !== "settlement") {
+            return { ok: false, reason: "invalid_city_target", message: "その vertex は都市化できません" };
+        }
+        if (player.remainingPieces.cities <= 0) {
+            return { ok: false, reason: "no_city_piece", message: "都市コマが残っていません" };
+        }
+
+        const precheck = canApplyResourceChanges(costChanges, { actionType: action.actionType });
+        if (!precheck.ok) {
+            return { ok: false, reason: precheck.reason, detail: precheck.detail, message: "資源が足りないため都市化できません" };
+        }
+
+        vertexState.buildingType = "city";
+        player.remainingPieces.cities -= 1;
+        player.remainingPieces.settlements += 1;
+        recomputePoints();
+        const applyResult = applyResourceChanges(costChanges, { actionType: action.actionType });
+        if (!applyResult.ok) {
+            return { ok: false, reason: applyResult.reason, detail: applyResult.detail, message: "資源反映に失敗したため都市化を中止しました" };
+        }
+
+        saveGame(`cpu execute ${action.actionType}`);
+        renderAll();
+        return { ok: true, actionType: action.actionType, message: `${player.name} が ${action.targetId} を都市化しました` };
+    }
+
+    // 役割: CPU 用に発展カードを 1 枚購入する
+    function executeCpuBuyDevCard(action, playerId) {
+        const player = getPlayerById(playerId);
+        const costChanges = [
+            { playerId, resource: "sheep", amount: -1 },
+            { playerId, resource: "wheat", amount: -1 },
+            { playerId, resource: "ore", amount: -1 }
+        ];
+
+        if (!player) {
+            return { ok: false, reason: "player_not_found", message: "プレイヤーが見つかりません" };
+        }
+        if (!gameState.developmentDeck.length) {
+            return { ok: false, reason: "empty_deck", message: "発展カード山札が空です" };
+        }
+
+        const precheck = canApplyResourceChanges(costChanges, { actionType: action.actionType });
+        if (!precheck.ok) {
+            return { ok: false, reason: precheck.reason, detail: precheck.detail, message: "資源が足りないため発展カードを購入できません" };
+        }
+
+        const card = gameState.developmentDeck.shift();
+        card.drawnTurn = gameState.currentTurn;
+        player.developmentCards.push(card);
+        const applyResult = applyResourceChanges(costChanges, { actionType: action.actionType });
+        if (!applyResult.ok) {
+            return { ok: false, reason: applyResult.reason, detail: applyResult.detail, message: "資源反映に失敗したため発展カード購入を中止しました" };
+        }
+
+        saveGame(`cpu execute ${action.actionType}`);
+        renderAll();
+        renderDevelopmentModal();
+        return {
+            ok: true,
+            actionType: action.actionType,
+            message: `${player.name} が発展カードを購入しました（${getDevelopmentCardDef(card.type).label}）`
+        };
+    }
+
+    // 役割: CPU 用に銀行交換を 1 回だけ反映する
+    function executeCpuBankTrade(action, playerId) {
+        const changes = [
+            ...buildResourceChangesFromItems(playerId, action?.give || [], -1),
+            ...buildResourceChangesFromItems(playerId, action?.get || [], 1)
+        ];
+
+        const applyResult = applyResourceChanges(changes, { actionType: action.actionType, targetActionType: action.targetActionType });
+        if (!applyResult.ok) {
+            return { ok: false, reason: applyResult.reason, detail: applyResult.detail, message: "銀行交換を実行できませんでした" };
+        }
+
+        saveGame(`cpu execute ${action.actionType}`);
+        renderAll();
+        return {
+            ok: true,
+            actionType: action.actionType,
+            message: `銀行交換を実行しました（${formatTradeResources(action.give)} → ${formatTradeResources(action.get)}）`
+        };
+    }
+
+    // 役割: CPU 用に収穫カードを使用して資源を獲得する
+    function executeCpuYearOfPlenty(action, playerId) {
+        const markResult = markDevelopmentCardUsed(playerId, "year_of_plenty");
+        if (!markResult.ok) {
+            return { ok: false, reason: markResult.reason, detail: markResult.detail, message: "使用できる収穫カードが見つかりません" };
+        }
+
+        const gainChanges = buildResourceChangesFromItems(playerId, action?.get || [], 1);
+        const applyResult = applyResourceChanges(gainChanges, { actionType: action.actionType, targetActionType: action.targetActionType });
+        if (!applyResult.ok) {
+            return { ok: false, reason: applyResult.reason, detail: applyResult.detail, message: "収穫カードの資源付与に失敗しました" };
+        }
+
+        saveGame(`cpu execute ${action.actionType}`);
+        renderAll();
+        return {
+            ok: true,
+            actionType: action.actionType,
+            message: `収穫カードを使用しました（${formatTradeResources(action.get)}）`
+        };
+    }
+
+    // 役割: CPU 用に街道建設カードで無料道路 2 本を反映する
+    function executeCpuRoadBuilding(action, playerId) {
+        const player = getPlayerById(playerId);
+        const targetEdges = Array.isArray(action?.targetEdges) ? action.targetEdges : [];
+
+        if (!player) {
+            return { ok: false, reason: "player_not_found", message: "プレイヤーが見つかりません" };
+        }
+        if (!targetEdges.length) {
+            return { ok: false, reason: "invalid_target", message: "街道建設カードの対象 edge がありません" };
+        }
+        if (player.remainingPieces.roads < targetEdges.length) {
+            return { ok: false, reason: "no_road_piece", message: "道路コマが足りません" };
+        }
+
+        for (const edgeId of targetEdges) {
+            const edgeState = gameState.boardState.edgeStates[edgeId];
+            if (!edgeState || edgeState.ownerPlayerId !== null) {
+                return { ok: false, reason: "edge_occupied", message: "街道建設カードの対象 edge がすでに埋まっています", detail: { edgeId } };
+            }
+        }
+
+        const markResult = markDevelopmentCardUsed(playerId, "road_building");
+        if (!markResult.ok) {
+            return { ok: false, reason: markResult.reason, detail: markResult.detail, message: "使用できる街道建設カードが見つかりません" };
+        }
+
+        targetEdges.forEach((edgeId) => {
+            gameState.boardState.edgeStates[edgeId].ownerPlayerId = playerId;
+            player.remainingPieces.roads -= 1;
+        });
+
+        saveGame(`cpu execute ${action.actionType}`);
+        renderAll();
+        return {
+            ok: true,
+            actionType: action.actionType,
+            message: `街道建設カードを使用しました（${targetEdges.map((edgeId) => `e${edgeId}`).join(", ")}）`
+        };
+    }
+
+    // 役割: CPU 用に独占カードを使用して対象資源を全員から回収する
+    function executeCpuMonopoly(action, playerId) {
+        const targetResource = action?.targetResource;
+        if (!targetResource || !RESOURCE_KEYS.includes(targetResource)) {
+            return { ok: false, reason: "invalid_resource", message: "独占カードの対象資源が不正です" };
+        }
+
+        const markResult = markDevelopmentCardUsed(playerId, "monopoly");
+        if (!markResult.ok) {
+            return { ok: false, reason: markResult.reason, detail: markResult.detail, message: "使用できる独占カードが見つかりません" };
+        }
+
+        const changes = [];
+        let collectedAmount = 0;
+        gameState.players.forEach((player) => {
+            if (player.id === playerId) {
+                return;
+            }
+            const owned = player.resources[targetResource] || 0;
+            if (owned <= 0) {
+                return;
+            }
+            changes.push({ playerId: player.id, resource: targetResource, amount: -owned });
+            collectedAmount += owned;
+        });
+        if (collectedAmount > 0) {
+            changes.push({ playerId, resource: targetResource, amount: collectedAmount });
+        }
+
+        const applyResult = applyResourceChanges(changes, { actionType: action.actionType, targetResource });
+        if (!applyResult.ok) {
+            return { ok: false, reason: applyResult.reason, detail: applyResult.detail, message: "独占カードの資源回収に失敗しました" };
+        }
+
+        saveGame(`cpu execute ${action.actionType}`);
+        renderAll();
+        return {
+            ok: true,
+            actionType: action.actionType,
+            message: `独占カードを使用しました（${RESOURCE_LABELS[targetResource]} を ${collectedAmount} 枚獲得）`
+        };
+    }
+
+    // 役割: CPU 用に騎士カードを使用し、既存の盗賊奪取関数で 1 回奪う
+    function executeCpuKnight(action, playerId) {
+        const player = getPlayerById(playerId);
+        if (!player) {
+            return { ok: false, reason: "player_not_found", message: "プレイヤーが見つかりません" };
+        }
+
+        const markResult = markDevelopmentCardUsed(playerId, "knight");
+        if (!markResult.ok) {
+            return { ok: false, reason: markResult.reason, detail: markResult.detail, message: "使用できる騎士カードが見つかりません" };
+        }
+        player.usedKnightsCount += 1;
+
+        const robberCandidates = buildRobberMoveCandidatesForPlayer(playerId);
+        const bestRobberCandidate = getBestRobberMoveCandidateForPlayer(playerId, robberCandidates);
+        const targetHexId = getHexIdFromActionTarget(bestRobberCandidate?.targetId);
+        if (targetHexId === null) {
+            return { ok: false, reason: "invalid_target", message: "盗賊移動先を決定できませんでした" };
+        }
+
+        gameState.boardState.hexStates.forEach((hexState) => {
+            hexState.robber = false;
+        });
+        const targetHexState = getHexStateById(targetHexId);
+        if (!targetHexState) {
+            return { ok: false, reason: "invalid_target", message: "盗賊移動先 hex が不正です" };
+        }
+        targetHexState.robber = true;
+
+        const candidatePlayerIds = getRobberVictimCandidates(targetHexId, playerId);
+        if (!candidatePlayerIds.length) {
+            saveGame(`cpu execute ${action.actionType}`);
+            renderAll();
+            return {
+                ok: true,
+                actionType: action.actionType,
+                message: `騎士カードを使用しました（盗賊移動: h${targetHexId}、奪取対象なし）`
+            };
+        }
+
+        const targetPlayerId = candidatePlayerIds.length === 1
+            ? candidatePlayerIds[0]
+            : chooseRobberVictimCandidate(candidatePlayerIds);
+
+        executeRobberSteal(targetPlayerId, playerId);
+        return {
+            ok: true,
+            actionType: action.actionType,
+            message: `騎士カードを使用しました（盗賊移動: h${targetHexId}）`
+        };
+    }
+
+    // 役割: CPU 用に勝利点カードを公開済みへ移す
+    function executeCpuVictoryPoint(action, playerId) {
+        const markResult = markDevelopmentCardUsed(playerId, "victory_point");
+        if (!markResult.ok) {
+            return { ok: false, reason: markResult.reason, detail: markResult.detail, message: "使用できる勝利点カードが見つかりません" };
+        }
+
+        saveGame(`cpu execute ${action.actionType}`);
+        renderAll();
+        return {
+            ok: true,
+            actionType: action.actionType,
+            message: "勝利点カードを公開しました"
+        };
+    }
+
+    // 役割: CPU 自動実行用に 1 action だけ実際の盤面・資源へ反映する
+    // 使用: executeSuggestedCpuAction から、直前に保存した bestAction を再計算せずに実行する時
+    // 入出力: action, playerId を受け取り、{ ok, reason?, message } を返す
+    // 関連: applyResourceChanges / markDevelopmentCardUsed / executeRobberSteal / renderAll
+    function executeCpuAction(action, playerId) {
+        if (!action || !action.actionType) {
+            return { ok: false, reason: "invalid_action", message: "実行できるactionがありません" };
+        }
+
+        switch (action.actionType) {
+            case "build_road":
+                return executeCpuBuildRoad(action, playerId);
+            case "build_settlement":
+                return executeCpuBuildSettlement(action, playerId);
+            case "build_city":
+                return executeCpuBuildCity(action, playerId);
+            case "buy_dev_card":
+                return executeCpuBuyDevCard(action, playerId);
+            case "bank_trade":
+                return executeCpuBankTrade(action, playerId);
+            case "use_year_of_plenty":
+                return executeCpuYearOfPlenty(action, playerId);
+            case "use_road_building":
+                return executeCpuRoadBuilding(action, playerId);
+            case "use_monopoly":
+                return executeCpuMonopoly(action, playerId);
+            case "use_knight":
+                return executeCpuKnight(action, playerId);
+            case "use_victory_point":
+                return executeCpuVictoryPoint(action, playerId);
+            case "do_nothing":
+                renderAll();
+                return { ok: true, actionType: action.actionType, message: "CPUは何もしません" };
+            default:
+                return {
+                    ok: false,
+                    reason: "unsupported_action_type",
+                    message: `actionType ${action.actionType} の自動実行はまだ未対応です`
+                };
+        }
+    }
+
+    // 役割: 直前に保存した CPU 最善手を検証し、1 手だけ実行する
+    function executeSuggestedCpuAction() {
+        if (!lastSuggestedCpuAction) {
+            window.alert("先にCPU最善手表示を押してください");
+            return;
+        }
+
+        const currentPlayer = getCurrentPlayer();
+        const currentTurn = gameState.currentTurn || 1;
+        if (!currentPlayer || currentPlayer.id !== lastSuggestedCpuAction.playerId || currentTurn !== lastSuggestedCpuAction.turn) {
+            console.log("[CatanCPU] suggested action is stale", {
+                saved: lastSuggestedCpuAction,
+                currentPlayerId: currentPlayer?.id ?? null,
+                currentTurn
+            });
+            clearCpuBestActionDisplay();
+            clearLastSuggestedCpuAction("stale suggested action");
+            renderFuturePanel();
+            window.alert("状態が変わったため、再度CPU最善手表示を押してください");
+            return;
+        }
+
+        if (!lastSuggestedCpuAction.action || !lastSuggestedCpuAction.actionType) {
+            clearCpuBestActionDisplay();
+            clearLastSuggestedCpuAction("invalid suggested action");
+            renderFuturePanel();
+            window.alert("実行できるactionがありません");
+            return;
+        }
+
+        const savedAction = lastSuggestedCpuAction.action;
+        const playerId = lastSuggestedCpuAction.playerId;
+        clearCpuBestActionDisplay();
+        console.log("[CatanCPU] execute suggested action requested", lastSuggestedCpuAction);
+
+        const result = executeCpuAction(savedAction, playerId);
+        console.log("[CatanCPU] executeCpuAction result", result);
+        clearLastSuggestedCpuAction(result.ok ? `executed ${savedAction.actionType}` : `failed ${savedAction.actionType}`);
+
+        if (!result.ok) {
+            renderFuturePanel();
+            window.alert(result.message || "CPU自動実行に失敗しました");
+            return;
+        }
+
+        window.alert(result.message || `CPU自動実行を行いました: ${savedAction.actionType}`);
     }
 
     // 役割: 今この盤面で初期配置するなら最善の vertex / edge を表示する
@@ -4135,6 +4856,12 @@ function renderPorts(portLayer) {
                             CPU用最善手表示
                         </button>
                         <button
+                            id="executeSuggestedCpuActionBtn"
+                            class="btn"
+                        >
+                            CPU自動実行
+                        </button>
+                        <button
                             id="showInitialPlacementBtn"
                             class="btn"
                             ${cpuHelperReady ? "" : "disabled"}
@@ -4188,6 +4915,10 @@ function renderPorts(portLayer) {
         const bestActionBtn = document.getElementById("showCpuBestActionBtn");
         if (bestActionBtn) {
             bestActionBtn.addEventListener("click", showCpuBestActionForCurrentPlayer);
+        }
+        const executeSuggestedBtn = document.getElementById("executeSuggestedCpuActionBtn");
+        if (executeSuggestedBtn) {
+            executeSuggestedBtn.addEventListener("click", executeSuggestedCpuAction);
         }
         const initialPlacementBtn = document.getElementById("showInitialPlacementBtn");
         if (initialPlacementBtn) {
@@ -4776,14 +5507,17 @@ function renderPorts(portLayer) {
     yearOfPlenty: {
       multiplier: 0.95
     },
+    monopoly: {
+      gainValue: 11
+    },
     fixedActionScores: {
       doNothing: 35,
       buyDevCard: 45,
       useKnight: 36,
-      useMonopoly: 37,
       useVictoryPoint: 95
     }
   };
+  const MONOPOLY_RESOURCE_ORDER = ["wood", "brick", "sheep", "wheat", "ore"];
 
   // 役割: 採点処理から盤面・状態参照用の共通コンテキストを組み立てる
   // 使用: 各 score 系関数の入口で、boardData / gameState / state 配列を安全に取得する時
@@ -5550,9 +6284,81 @@ function renderPorts(portLayer) {
     };
   }
 
-  // 役割: 独占カード使用候補の固定値スコアを返す
+  // 役割: 相手全員が持つ資源枚数を資源別に合計する
+  function getOpponentResourceCounts(playerId, ctx) {
+    return MONOPOLY_RESOURCE_ORDER.reduce((counts, resourceKey) => {
+      counts[resourceKey] = ctx.gameState.players.reduce((sum, player) => {
+        if (!player || player.id === playerId) {
+          return sum;
+        }
+        return sum + (player.resources?.[resourceKey] || 0);
+      }, 0);
+      return counts;
+    }, {});
+  }
+
+  // 役割: 独占カードで最も多く奪える資源と見込み枚数を返す
+  function getBestMonopolyTarget(playerId, ctx) {
+    const resourceCountsByOpponents = getOpponentResourceCounts(playerId, ctx);
+    let targetResource = MONOPOLY_RESOURCE_ORDER[0] || null;
+    let expectedGain = targetResource ? (resourceCountsByOpponents[targetResource] || 0) : 0;
+
+    MONOPOLY_RESOURCE_ORDER.forEach((resourceKey) => {
+      const count = resourceCountsByOpponents[resourceKey] || 0;
+      if (count > expectedGain) {
+        targetResource = resourceKey;
+        expectedGain = count;
+      }
+    });
+
+    return {
+      resourceCountsByOpponents,
+      targetResource,
+      expectedGain
+    };
+  }
+
+  // 役割: 独占カード候補を相手資源合計から動的採点する
+  // 使用: use_monopoly 候補の score / targetResource / expectedGain を決める時
+  // 入出力: action, playerId を受け取り、targetResource と expectedGain を含む score 結果を返す
+  // 関連: getOpponentResourceCounts / getBestMonopolyTarget / SCORING_CONFIG.monopoly / scoreAction
   function scoreUseMonopoly(action, playerId) {
-    return createFixedScore(SCORING_CONFIG.fixedActionScores.useMonopoly);
+    const ctx = getScoringContext();
+    if (!ctx) {
+      return {
+        score: 0,
+        targetResource: null,
+        expectedGain: 0,
+        scoreBreakdown: {
+          resourceCountsByOpponents: {},
+          targetResource: null,
+          expectedGain: 0,
+          gainValue: SCORING_CONFIG.monopoly.gainValue,
+          finalScore: 0
+        }
+      };
+    }
+
+    const {
+      resourceCountsByOpponents,
+      targetResource,
+      expectedGain
+    } = getBestMonopolyTarget(playerId, ctx);
+    const gainValue = SCORING_CONFIG.monopoly.gainValue;
+    const finalScore = clampScore(expectedGain * gainValue);
+
+    return {
+      score: finalScore,
+      targetResource,
+      expectedGain,
+      scoreBreakdown: {
+        resourceCountsByOpponents,
+        targetResource,
+        expectedGain,
+        gainValue,
+        finalScore
+      }
+    };
   }
 
   // 役割: 勝利点カード公開候補の固定値スコアを返す
@@ -6358,6 +7164,7 @@ function renderPorts(portLayer) {
     const scored = scoringApi.scoreAction(action, playerId) || {};
     return {
       ...action,
+      ...scored,
       score: typeof scored.score === "number" ? scored.score : 0,
       scoreBreakdown: scored.scoreBreakdown || { base: 0 }
     };
@@ -6573,6 +7380,7 @@ function renderPorts(portLayer) {
       const scored = scoringApi.scoreAction(action, playerId) || {};
       return {
         ...action,
+        ...scored,
         score: typeof scored.score === "number" ? scored.score : 0,
         scoreBreakdown: scored.scoreBreakdown || { base: 0 }
       };

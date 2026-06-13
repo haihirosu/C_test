@@ -1,13 +1,14 @@
-const CACHE_NAME = "catan-pwa-v2";
+const CACHE_NAME = "catan-pwa-v4";
 const ASSETS_TO_CACHE = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
+  "./sea-bg.webp",
   "./local-catan-apple-touch-icon-180.png",
   "./local-catan-icon-192.png",
   "./local-catan-splash-512.png",
   "./img/terrain/terrain-desert.webp",
-  "./img/terrain/terrain-forest.webp",
+  "./img/terrain/terrain-wood.webp",
   "./img/terrain/terrain-sheep.webp",
   "./img/terrain/terrain-brick.webp",
   "./img/terrain/terrain-ore.webp",

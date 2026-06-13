@@ -1473,6 +1473,11 @@ body {
   <style>
    
   </style>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <meta name="theme-color" content="#2f855a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Catan">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
 </head>
 <body>
 <div id="app">
@@ -1547,7 +1552,7 @@ body {
   const SVG_NS = "http://www.w3.org/2000/svg";
   const APP_CONFIG = {
     BUILD_TARGET: "iphone-single",
-    USE_CARD_IMAGES: false,
+    USE_CARD_IMAGES: true,
     STORAGE_MODE: "localStorage"
   };
   const STORAGE_KEY = "catan_local_board_save_v1";
@@ -7654,5 +7659,18 @@ function renderPorts(portLayer) {
 })();
 </script>
 <!-- BUILD:JS_END -->
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js")
+      .then((registration) => {
+        console.log("Service Worker registered:", registration.scope);
+      })
+      .catch((error) => {
+        console.warn("Service Worker registration failed:", error);
+      });
+  });
+}
+</script>
 </body>
 </html>

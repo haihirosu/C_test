@@ -1,16 +1,22 @@
-const CACHE_NAME = "catan-pwa-v1";
+const CACHE_NAME = "catan-pwa-v2";
 const ASSETS_TO_CACHE = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
-  "./img/icon/local-catan-apple-touch-icon-180.png",
-  "./img/icon/local-catan-icon-192.png",
-  "./img/icon/local-catan-splash-512.png",
-  "./img/dev_knight.png",
-  "./img/dev_monopoly.png",
-  "./img/dev_road_building.png",
-  "./img/dev_victory_point.png",
-  "./img/dev_year_of_plenty.png"
+  "./local-catan-apple-touch-icon-180.png",
+  "./local-catan-icon-192.png",
+  "./local-catan-splash-512.png",
+  "./img/terrain/terrain-desert.webp",
+  "./img/terrain/terrain-forest.webp",
+  "./img/terrain/terrain-sheep.webp",
+  "./img/terrain/terrain-brick.webp",
+  "./img/terrain/terrain-ore.webp",
+  "./img/terrain/terrain-wheat.webp",
+  "./img/card/dev_knight.webp",
+  "./img/card/dev_monopoly.webp",
+  "./img/card/dev_road_building.webp",
+  "./img/card/dev_victory_point.webp",
+  "./img/card/dev_year_of_plenty.webp"
 ];
 
 self.addEventListener("install", (event) => {

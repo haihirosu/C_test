@@ -1367,10 +1367,10 @@ body {
 
   .mobile-tab-rail-bottom {
     left: 50%;
-    bottom: 0;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
     transform: translateX(-50%);
     align-items: center;
-    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 4px);
+    padding-bottom: 0;
   }
 
   .mobile-panel-tab {
@@ -1410,8 +1410,8 @@ body {
     position: fixed;
     top: var(--mobile-top-offset, 120px);
     left: calc(var(--mobile-side-tab-width) - 4px);
-    bottom: 14px;
-    max-height: calc(100vh - var(--mobile-top-offset, 120px) - 28px);
+    height: min(72vh, 560px);
+    max-height: min(72vh, 560px);
     width: min(calc(100vw - var(--mobile-side-tab-width) - 12px), 336px);
     margin: 0;
     padding: 12px 10px calc(16px + env(safe-area-inset-bottom, 0px));
@@ -1434,7 +1434,7 @@ body {
     position: fixed;
     left: calc(var(--mobile-side-tab-width) + 6px);
     right: 8px;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 46px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 58px);
     max-height: min(56vh, 500px);
     margin: 0;
     overflow-y: auto;
@@ -1555,7 +1555,16 @@ body {
     USE_CARD_IMAGES: true,
     STORAGE_MODE: "localStorage"
   };
+  const IS_DISTRIBUTION_BUILD = APP_CONFIG.BUILD_TARGET === "iphone-single";
   const STORAGE_KEY = "catan_local_board_save_v1";
+  const TERRAIN_IMAGE_PATHS = {
+    desert: IS_DISTRIBUTION_BUILD ? "./img/terrain/terrain-desert.webp" : "img/terrain/terrain-desert.png",
+    forest: IS_DISTRIBUTION_BUILD ? "./img/terrain/terrain-forest.webp" : "img/terrain/terrain-forest.png",
+    sheep: IS_DISTRIBUTION_BUILD ? "./img/terrain/terrain-sheep.webp" : "img/terrain/terrain-sheep.png",
+    brick: IS_DISTRIBUTION_BUILD ? "./img/terrain/terrain-brick.webp" : "img/terrain/terrain-brick.png",
+    ore: IS_DISTRIBUTION_BUILD ? "./img/terrain/terrain-ore.webp" : "img/terrain/terrain-ore.png",
+    wheat: IS_DISTRIBUTION_BUILD ? "./img/terrain/terrain-wheat.webp" : "img/terrain/terrain-wheat.png"
+  };
 
   const PLAYER_MASTER = [
     { id: 0, name: "Player 1", color: "#ef4444" },
@@ -1590,31 +1599,31 @@ body {
     knight: {
       label: "騎士",
       description: "盗賊を移動し、資源を1枚奪う",
-      imagePath: "img/dev_knight.png",
+      imagePath: IS_DISTRIBUTION_BUILD ? "./img/card/dev_knight.webp" : "img/dev_knight.png",
       emoji: "🛡️"
     },
     road_building: {
       label: "街道建設",
       description: "街道を2本建設できる",
-      imagePath: "img/dev_road_building.png",
+      imagePath: IS_DISTRIBUTION_BUILD ? "./img/card/dev_road_building.webp" : "img/dev_road_building.png",
       emoji: "🛣️"
     },
     year_of_plenty: {
       label: "収穫",
       description: "好きな資源を2枚獲得する",
-      imagePath: "img/dev_year_of_plenty.png",
+      imagePath: IS_DISTRIBUTION_BUILD ? "./img/card/dev_year_of_plenty.webp" : "img/dev_year_of_plenty.png",
       emoji: "🌾"
     },
     monopoly: {
       label: "独占",
       description: "指定した資源を全員から集める",
-      imagePath: "img/dev_monopoly.png",
+      imagePath: IS_DISTRIBUTION_BUILD ? "./img/card/dev_monopoly.webp" : "img/dev_monopoly.png",
       emoji: "👑"
     },
     victory_point: {
       label: "勝利点",
       description: "勝利点を1点得る",
-      imagePath: "img/dev_victory_point.png",
+      imagePath: IS_DISTRIBUTION_BUILD ? "./img/card/dev_victory_point.webp" : "img/dev_victory_point.png",
       emoji: "⭐"
     }
   };
@@ -3897,7 +3906,32 @@ function buildHexDefs(svg) {
   desertPattern.appendChild(createSvgEl("circle", { cx: "27", cy: "9", r: "1.2", fill: "#c59f62", opacity: "0.12" }));
   defs.appendChild(desertPattern);
 
+  appendTerrainImagePatterns(defs);
+
   svg.appendChild(defs);
+}
+
+// 役割: 地形画像を hex 背景へ貼るための SVG pattern 定義を追加する
+function appendTerrainImagePatterns(defs) {
+  Object.entries(TERRAIN_IMAGE_PATHS).forEach(([terrain, href]) => {
+    const pattern = createSvgEl("pattern", {
+      id: `terrain-image-${terrain}`,
+      patternUnits: "objectBoundingBox",
+      patternContentUnits: "objectBoundingBox",
+      width: 1,
+      height: 1
+    });
+    const image = createSvgEl("image", {
+      href,
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+      preserveAspectRatio: "xMidYMid slice"
+    });
+    pattern.appendChild(image);
+    defs.appendChild(pattern);
+  });
 }
 
 // 役割: PORT_MARKERS をもとに港表示を盤面外周へ描画する
@@ -4581,18 +4615,9 @@ function renderPorts(portLayer) {
             points: pointStr,
             class: `hex terrain-${hexState.terrain}${robberHexClass}`,
             "data-hex-id": hex.id,
-            fill: `url(#hex-gradient-${hexState.terrain})`,
-            filter: "url(#hex-surface-filter)"
+            fill: `url(#terrain-image-${hexState.terrain})`
         });
         hexLayer.appendChild(poly);
-
-        const patternOverlay = createSvgEl("polygon", {
-            points: pointStr,
-            class: "hex-pattern-overlay",
-            fill: `url(#hex-pattern-${hexState.terrain})`,
-            "data-hex-id": hex.id
-        });
-        hexLayer.appendChild(patternOverlay);
 
         const highlightOverlay = createSvgEl("polygon", {
             points: pointStr,

@@ -561,12 +561,12 @@ body {
       /* 個別色はJSでfill指定 */
     }
 
-    .terrain-wood   { fill: #7fb069; }
-    .terrain-brick  { fill: #c97b63; }
-    .terrain-sheep  { fill: #a7d46f; }
-    .terrain-wheat  { fill: #e7cf65; }
-    .terrain-ore    { fill: #9aa5b1; }
-    .terrain-desert { fill: #dbc59a; }
+    .terrain-wood   { /* fill disabled: use SVG terrain image pattern */ }
+    .terrain-brick  { /* fill disabled: use SVG terrain image pattern */ }
+    .terrain-sheep  { /* fill disabled: use SVG terrain image pattern */ }
+    .terrain-wheat  { /* fill disabled: use SVG terrain image pattern */ }
+    .terrain-ore    { /* fill disabled: use SVG terrain image pattern */ }
+    .terrain-desert { /* fill disabled: use SVG terrain image pattern */ }
 
     .status-line {
       font-size: 13px;
@@ -1266,6 +1266,23 @@ body {
   stroke: #334155;
   stroke-width: 3;
   opacity: 0.8;
+}
+
+.robber-mark-bg {
+  fill: rgba(255, 255, 255, 0.88);
+  stroke: #111827;
+  stroke-width: 2;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.robber-mark-text {
+  fill: #111827;
+  font-weight: 800;
+  font-size: 20px;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
 }
 
 .robber-hit-active {
@@ -4617,6 +4634,7 @@ function renderPorts(portLayer) {
             "data-hex-id": hex.id,
             fill: `url(#terrain-image-${hexState.terrain})`
         });
+        poly.style.fill = `url(#terrain-image-${hexState.terrain})`;
         hexLayer.appendChild(poly);
 
         const highlightOverlay = createSvgEl("polygon", {
@@ -4686,11 +4704,18 @@ function renderPorts(portLayer) {
         }
 
         if (hexState.robber) {
+            const robberBg = createSvgEl("circle", {
+                cx: hex.cx,
+                cy: hex.cy + 34,
+                r: 15,
+                class: "robber-mark-bg"
+            });
+            hexLayer.appendChild(robberBg);
+
             const robberMark = createSvgEl("text", {
                 x: hex.cx,
-                y: hex.cy + 40,
-                class: "hex-label",
-                fill: "#111827"
+                y: hex.cy + 36,
+                class: "robber-mark-text"
             });
             robberMark.textContent = "盗";
             hexLayer.appendChild(robberMark);

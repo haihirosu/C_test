@@ -473,7 +473,7 @@ body {
       background-repeat: no-repeat;
       border: 1px solid #d9dce5;
       border-radius: 12px;
-      padding: 12px;
+      padding: 0;
       box-shadow: 0 4px 18px rgba(0,0,0,0.06);
       overflow: auto;
       min-width: 0;
@@ -507,8 +507,8 @@ body {
 
     svg {
       display: block;
-      width: 1100px;
-      max-width: 100%;
+      width: 100%;
+      max-width: none;
       height: auto;
       position: relative;
       z-index: 1;
@@ -1210,12 +1210,12 @@ body {
 .port-box {
   fill: rgba(255, 255, 255, 0.96);
   stroke: #94a3b8;
-  stroke-width: 2;
-  filter: drop-shadow(0 4px 10px rgba(15, 23, 42, 0.08));
+  stroke-width: 1.5;
+  filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.08));
 }
 
 .port-detail {
-  font-size: 11px;
+  font-size: 9px;
   font-weight: bold;
   text-anchor: middle;
   fill: #64748b;
@@ -1223,7 +1223,7 @@ body {
 }
 
 .port-label {
-  font-size: 14px;
+  font-size: 11px;
   font-weight: bold;
   text-anchor: middle;
   fill: #0f172a;
@@ -1539,7 +1539,7 @@ body {
     </div>
     <div class="board-wrap">
       <div id="robberStatusBadge" class="robber-status-badge hidden">盗賊を移動してください</div>
-      <svg id="board" viewBox="0 0 1100 850"></svg>
+      <svg id="board" viewBox="202 48 688 648"></svg>
     </div>
     <div id="controlSidebar" class="sidebar sidebar-right">
         <div id="dicePanelArea"></div>
@@ -1680,63 +1680,63 @@ body {
       id: "port-nw",
       label: "小麦 2:1",
       detail: "港",
-      width: 82,
+      width: 62,
       vertexIds: [47, 44]
     },
     {
       id: "port-n",
       label: "鉱石 2:1",
       detail: "港",
-      width: 96,
+      width: 66,
       vertexIds: [38, 41]
     },
     {
       id: "port-ne",
       label: "3:1",
       detail: "任意",
-      width: 82,
+      width: 48,
       vertexIds: [34, 35]
     },
     {
       id: "port-e1",
       label: "羊毛 2:1",
       detail: "港",
-      width: 96,
+      width: 66,
       vertexIds: [31, 26]
     },
     {
       id: "port-e2",
       label: "3:1",
       detail: "任意",
-      width: 82,
+      width: 48,
       vertexIds: [23, 24]
     },
     {
       id: "port-se",
       label: "3:1",
       detail: "任意",
-      width: 96,
+      width: 48,
       vertexIds: [20, 21]
     },
     {
       id: "port-s",
       label: "レンガ 2:1",
       detail: "港",
-      width: 96,
+      width: 68,
       vertexIds: [11, 12]
     },
     {
       id: "port-sw",
       label: "木材 2:1",
       detail: "港",
-      width: 106,
+      width: 68,
       vertexIds: [8, 9]
     },
     {
       id: "port-w",
       label: "3:1",
       detail: "任意",
-      width: 82,
+      width: 48,
       vertexIds: [4, 5]
     }
   ];
@@ -3977,6 +3977,18 @@ function appendTerrainImagePatterns(defs) {
 
 // 役割: PORT_MARKERS をもとに港表示を盤面外周へ描画する
 function renderPorts(portLayer) {
+  const portLayoutOverrides = {
+    "port-nw": { radialOffset: 40, shiftX: -4, shiftY: 0 },
+    "port-n": { radialOffset: 28, shiftX: -14, shiftY: -16 },
+    "port-ne": { radialOffset: 18, shiftX: -8, shiftY: -60 },
+    "port-e1": { radialOffset: 18, shiftX: -4, shiftY: 20 },
+    "port-e2": { radialOffset: 28, shiftX: 8, shiftY: -10 },
+    "port-se": { radialOffset: 28, shiftX: 8, shiftY: -4 },
+    "port-s": { radialOffset: 18, shiftX: 10, shiftY: 46 },
+    "port-sw": { radialOffset: 20, shiftX: 6, shiftY: -52 },
+    "port-w": { radialOffset: 18, shiftX: 6, shiftY: -14 }
+  };
+
   PORT_MARKERS.forEach((port) => {
     const pointA = boardData.vertices[port.vertexIds[0]];
     const pointB = boardData.vertices[port.vertexIds[1]];
@@ -3991,10 +4003,15 @@ function renderPorts(portLayer) {
     const vectorLength = Math.hypot(vectorX, vectorY) || 1;
     const unitX = vectorX / vectorLength;
     const unitY = vectorY / vectorLength;
-    const anchorX = midX + unitX * 16;
-    const anchorY = midY + unitY * 16;
-    const boxCenterX = midX + unitX * 84;
-    const boxCenterY = midY + unitY * 84;
+    const portLayout = portLayoutOverrides[port.id] || {};
+    const anchorOffset = portLayout.anchorOffset ?? 10;
+    const radialOffset = portLayout.radialOffset ?? 40;
+    const shiftX = portLayout.shiftX ?? 0;
+    const shiftY = portLayout.shiftY ?? 0;
+    const anchorX = midX + unitX * anchorOffset;
+    const anchorY = midY + unitY * anchorOffset;
+    const boxCenterX = midX + unitX * radialOffset + shiftX;
+    const boxCenterY = midY + unitY * radialOffset + shiftY;
 
     const group = createSvgEl("g", {
       class: "port-group",
@@ -4023,7 +4040,7 @@ function renderPorts(portLayer) {
       const node = createSvgEl("circle", {
         cx: point.x,
         cy: point.y,
-        r: 8,
+        r: 7,
         class: "port-node"
       });
       group.appendChild(node);
@@ -4032,12 +4049,12 @@ function renderPorts(portLayer) {
     const anchor = createSvgEl("circle", {
       cx: anchorX,
       cy: anchorY,
-      r: 5,
+      r: 4,
       class: "port-anchor"
     });
     group.appendChild(anchor);
 
-    const boxHeight = 48;
+    const boxHeight = 34;
     const boxX = boxCenterX - port.width / 2;
     const boxY = boxCenterY - boxHeight / 2;
 
@@ -4046,15 +4063,15 @@ function renderPorts(portLayer) {
       y: boxY,
       width: port.width,
       height: boxHeight,
-      rx: 12,
-      ry: 12,
+      rx: 10,
+      ry: 10,
       class: "port-box"
     });
     group.appendChild(box);
 
     const detail = createSvgEl("text", {
       x: boxCenterX,
-      y: boxY + 16,
+      y: boxY + 11,
       class: "port-detail"
     });
     detail.textContent = port.detail;
@@ -4062,7 +4079,7 @@ function renderPorts(portLayer) {
 
     const label = createSvgEl("text", {
       x: boxCenterX,
-      y: boxY + 34,
+      y: boxY + 24,
       class: "port-label"
     });
     label.textContent = port.label;

@@ -473,12 +473,13 @@ body {
       background-repeat: no-repeat;
       border: 1px solid #d9dce5;
       border-radius: 12px;
-      padding: 0;
+      padding: 8px 10px;
       box-shadow: 0 4px 18px rgba(0,0,0,0.06);
-      overflow: auto;
+      overflow: hidden;
       min-width: 0;
       position: relative;
       isolation: isolate;
+      box-sizing: border-box;
     }
 
     .board-wrap::before {
@@ -514,6 +515,29 @@ body {
       z-index: 1;
     }
 
+    #board {
+      display: block;
+      width: 100%;
+      height: auto;
+      margin: 0 auto;
+    }
+
+    @media (min-width: 769px) {
+      .board-wrap {
+        width: 100%;
+        max-width: 980px;
+        margin-left: auto;
+        margin-right: auto;
+        padding: 10px 12px;
+      }
+
+      #board {
+        width: auto;
+        max-width: 100%;
+        max-height: calc(100vh - 170px);
+      }
+    }
+
     .hex {
       stroke: #4b5563;
       stroke-width: 2;
@@ -532,6 +556,13 @@ body {
       stroke: #cbd5e1;
       stroke-width: 4;
       stroke-linecap: round;
+      pointer-events: none;
+    }
+
+    .edge-road-outline {
+      stroke: rgba(255, 255, 255, 0.92);
+      stroke-width: 14;
+      stroke-linecap: butt;
       pointer-events: none;
     }
 
@@ -1346,9 +1377,12 @@ body {
   }
 
   .board-wrap {
-    padding: 0;
-    margin-left: -4px;
-    margin-right: -4px;
+    width: calc(100vw - 16px);
+    max-width: none;
+    padding-left: 8px;
+    padding-right: 8px;
+    margin-left: auto;
+    margin-right: auto;
     margin-bottom: 76px;
     overflow: hidden;
     border: none;
@@ -1362,9 +1396,9 @@ body {
   }
 
   #board {
-    width: calc(100vw + 44px);
+    width: 100%;
     max-width: none;
-    margin-left: -22px;
+    margin-left: 0;
   }
 
   .sidebar {
@@ -4776,6 +4810,15 @@ function renderPorts(portLayer) {
       const edgeState = gameState.boardState.edgeStates[edge.id];
       if (edgeState.ownerPlayerId !== null) {
         const player = getPlayerById(edgeState.ownerPlayerId);
+        const roadOutline = createSvgEl("line", {
+          x1: edge.x1,
+          y1: edge.y1,
+          x2: edge.x2,
+          y2: edge.y2,
+          class: "edge-road-outline"
+        });
+        edgeLayer.appendChild(roadOutline);
+
         const road = createSvgEl("line", {
           x1: edge.x1,
           y1: edge.y1,

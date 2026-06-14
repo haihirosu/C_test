@@ -480,6 +480,7 @@ body {
       position: relative;
       isolation: isolate;
       box-sizing: border-box;
+      touch-action: none;
     }
 
     .board-wrap::before {
@@ -520,6 +521,30 @@ body {
       width: 100%;
       height: auto;
       margin: 0 auto;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+
+    .board-reset-btn {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 21;
+      padding: 5px 8px;
+      border: 1px solid rgba(15, 23, 42, 0.16);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.9);
+      color: #0f172a;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+      cursor: pointer;
+      backdrop-filter: blur(2px);
+    }
+
+    .board-reset-btn:active {
+      transform: translateY(1px);
     }
 
     @media (min-width: 769px) {
@@ -1573,6 +1598,7 @@ body {
     </div>
     <div class="board-wrap">
       <div id="robberStatusBadge" class="robber-status-badge hidden">盗賊を移動してください</div>
+      <button id="resetBoardViewBtn" class="board-reset-btn" type="button">1x</button>
       <svg id="board" viewBox="202 48 688 648"></svg>
     </div>
     <div id="controlSidebar" class="sidebar sidebar-right">
@@ -1848,6 +1874,27 @@ body {
   let inspectModeState = {
     active: false,
     lastTouchedLabel: "-"
+  };
+  let boardViewportState = {
+    scale: 1,
+    panX: 0,
+    panY: 0,
+    baseWidth: 0,
+    baseHeight: 0,
+    wrapperWidth: 0,
+    wrapperHeight: 0,
+    baseOffsetX: 0,
+    baseOffsetY: 0,
+    isPanning: false,
+    isPinching: false,
+    didTransformGesture: false,
+    startTouchX: 0,
+    startTouchY: 0,
+    startPanX: 0,
+    startPanY: 0,
+    pinchStartDistance: 0,
+    pinchStartScale: 1,
+    suppressTapUntil: 0
   };
 
   // 役割: 座標から vertex 一意化用キー文字列を作る
@@ -2791,6 +2838,194 @@ body {
         return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
     }
 
+    // 役割: 盤面ズーム・パン直後のタップ抑止が必要な時間帯かを返す
+    function shouldSuppressBoardTap() {
+        return boardViewportState.isPanning
+            || boardViewportState.isPinching
+            || Date.now() < boardViewportState.suppressTapUntil;
+    }
+
+    // 役割: board-wrap と #board の現在サイズをもとに、ズーム・パン計算用の基準値を更新する
+    function refreshBoardViewportMetrics() {
+        const wrapper = document.querySelector(".board-wrap");
+        const board = document.getElementById("board");
+        if (!wrapper || !board) return;
+
+        boardViewportState.wrapperWidth = wrapper.clientWidth;
+        boardViewportState.wrapperHeight = wrapper.clientHeight;
+        boardViewportState.baseWidth = board.clientWidth;
+        boardViewportState.baseHeight = board.clientHeight;
+        boardViewportState.baseOffsetX = Math.max(0, (wrapper.clientWidth - board.clientWidth) / 2);
+        boardViewportState.baseOffsetY = Math.max(0, (wrapper.clientHeight - board.clientHeight) / 2);
+    }
+
+    // 役割: 現在の倍率に応じて panX / panY を盤面が見切れすぎない範囲に収める
+    function clampBoardViewportPan() {
+        const {
+            scale,
+            baseWidth,
+            baseHeight,
+            wrapperWidth,
+            wrapperHeight,
+            baseOffsetX,
+            baseOffsetY
+        } = boardViewportState;
+
+        if (scale <= 1 || baseWidth <= 0 || baseHeight <= 0) {
+            boardViewportState.panX = 0;
+            boardViewportState.panY = 0;
+            return;
+        }
+
+        const scaledWidth = baseWidth * scale;
+        const scaledHeight = baseHeight * scale;
+
+        const minPanX = wrapperWidth - baseOffsetX - scaledWidth;
+        const maxPanX = -baseOffsetX;
+        const minPanY = wrapperHeight - baseOffsetY - scaledHeight;
+        const maxPanY = -baseOffsetY;
+
+        boardViewportState.panX = Math.min(maxPanX, Math.max(minPanX, boardViewportState.panX));
+        boardViewportState.panY = Math.min(maxPanY, Math.max(minPanY, boardViewportState.panY));
+    }
+
+    // 役割: 現在の scale / pan を #board の transform に反映する
+    function applyBoardTransform() {
+        const board = document.getElementById("board");
+        if (!board) return;
+
+        refreshBoardViewportMetrics();
+        clampBoardViewportPan();
+        board.style.transform = `translate(${boardViewportState.panX}px, ${boardViewportState.panY}px) scale(${boardViewportState.scale})`;
+    }
+
+    // 役割: 盤面表示のズーム・パン状態を初期値へ戻す
+    function resetBoardTransform() {
+        boardViewportState.scale = 1;
+        boardViewportState.panX = 0;
+        boardViewportState.panY = 0;
+        boardViewportState.isPanning = false;
+        boardViewportState.isPinching = false;
+        boardViewportState.didTransformGesture = false;
+        boardViewportState.suppressTapUntil = Date.now() + 120;
+        applyBoardTransform();
+    }
+
+    // 役割: 2本指ピンチの距離を計算する
+    function getTouchDistance(touchA, touchB) {
+        return Math.hypot(touchB.clientX - touchA.clientX, touchB.clientY - touchA.clientY);
+    }
+
+    // 役割: board-wrap 基準のタッチ座標を返す
+    function getTouchPointInBoardWrap(touch, wrapperRect) {
+        return {
+            x: touch.clientX - wrapperRect.left,
+            y: touch.clientY - wrapperRect.top
+        };
+    }
+
+    // 役割: board-wrap 上でのピンチズーム・ドラッグ移動を初期化する
+    function initializeBoardViewportControls() {
+        const wrapper = document.querySelector(".board-wrap");
+        const board = document.getElementById("board");
+        const resetBtn = document.getElementById("resetBoardViewBtn");
+        if (!wrapper || !board || wrapper.dataset.boardViewportReady === "true") {
+            return;
+        }
+
+        wrapper.dataset.boardViewportReady = "true";
+        refreshBoardViewportMetrics();
+        applyBoardTransform();
+
+        resetBtn?.addEventListener("click", (event) => {
+            event.stopPropagation();
+            resetBoardTransform();
+        });
+
+        wrapper.addEventListener("touchstart", (event) => {
+            if (event.touches.length === 2) {
+                const [touchA, touchB] = event.touches;
+                const wrapperRect = wrapper.getBoundingClientRect();
+                const centerX = (touchA.clientX + touchB.clientX) / 2 - wrapperRect.left;
+                const centerY = (touchA.clientY + touchB.clientY) / 2 - wrapperRect.top;
+                boardViewportState.isPinching = true;
+                boardViewportState.isPanning = false;
+                boardViewportState.didTransformGesture = true;
+                boardViewportState.pinchStartDistance = getTouchDistance(touchA, touchB);
+                boardViewportState.pinchStartScale = boardViewportState.scale;
+                boardViewportState.suppressTapUntil = Date.now() + 300;
+                boardViewportState.startPanX = boardViewportState.panX;
+                boardViewportState.startPanY = boardViewportState.panY;
+                boardViewportState.pinchFocusContentX = (centerX - boardViewportState.baseOffsetX - boardViewportState.panX) / boardViewportState.scale;
+                boardViewportState.pinchFocusContentY = (centerY - boardViewportState.baseOffsetY - boardViewportState.panY) / boardViewportState.scale;
+                return;
+            }
+
+            if (event.touches.length === 1 && boardViewportState.scale > 1) {
+                const touch = event.touches[0];
+                boardViewportState.startTouchX = touch.clientX;
+                boardViewportState.startTouchY = touch.clientY;
+                boardViewportState.startPanX = boardViewportState.panX;
+                boardViewportState.startPanY = boardViewportState.panY;
+                boardViewportState.isPanning = false;
+                boardViewportState.didTransformGesture = false;
+            }
+        }, { passive: true });
+
+        wrapper.addEventListener("touchmove", (event) => {
+            if (event.touches.length === 2) {
+                const [touchA, touchB] = event.touches;
+                const wrapperRect = wrapper.getBoundingClientRect();
+                const centerX = (touchA.clientX + touchB.clientX) / 2 - wrapperRect.left;
+                const centerY = (touchA.clientY + touchB.clientY) / 2 - wrapperRect.top;
+                const distance = getTouchDistance(touchA, touchB);
+                const nextScale = Math.min(2.5, Math.max(1, boardViewportState.pinchStartScale * (distance / (boardViewportState.pinchStartDistance || distance || 1))));
+                boardViewportState.scale = nextScale;
+                boardViewportState.panX = centerX - boardViewportState.baseOffsetX - boardViewportState.pinchFocusContentX * nextScale;
+                boardViewportState.panY = centerY - boardViewportState.baseOffsetY - boardViewportState.pinchFocusContentY * nextScale;
+                boardViewportState.suppressTapUntil = Date.now() + 300;
+                applyBoardTransform();
+                event.preventDefault();
+                return;
+            }
+
+            if (event.touches.length === 1 && boardViewportState.scale > 1 && !boardViewportState.isPinching) {
+                const touch = event.touches[0];
+                const deltaX = touch.clientX - boardViewportState.startTouchX;
+                const deltaY = touch.clientY - boardViewportState.startTouchY;
+                if (!boardViewportState.isPanning && Math.hypot(deltaX, deltaY) >= 8) {
+                    boardViewportState.isPanning = true;
+                    boardViewportState.didTransformGesture = true;
+                }
+                if (boardViewportState.isPanning) {
+                    boardViewportState.panX = boardViewportState.startPanX + deltaX;
+                    boardViewportState.panY = boardViewportState.startPanY + deltaY;
+                    boardViewportState.suppressTapUntil = Date.now() + 250;
+                    applyBoardTransform();
+                    event.preventDefault();
+                }
+            }
+        }, { passive: false });
+
+        const finishGesture = () => {
+            if (boardViewportState.isPanning || boardViewportState.isPinching || boardViewportState.didTransformGesture) {
+                boardViewportState.suppressTapUntil = Math.max(boardViewportState.suppressTapUntil, Date.now() + 180);
+            }
+            boardViewportState.isPanning = false;
+            boardViewportState.isPinching = false;
+            boardViewportState.didTransformGesture = false;
+            if (boardViewportState.scale <= 1.001) {
+                boardViewportState.scale = 1;
+                boardViewportState.panX = 0;
+                boardViewportState.panY = 0;
+            }
+            applyBoardTransform();
+        };
+
+        wrapper.addEventListener("touchend", finishGesture, { passive: true });
+        wrapper.addEventListener("touchcancel", finishGesture, { passive: true });
+    }
+
     // 役割: hex / edge / vertex の入力入口を共通化し、ID更新と本処理呼び出しを分岐する
     // 使用: renderBoard 内の盤面 hit 要素の click / tap 時
     // 入出力: type, id, event を受け取り、LastID を更新して必要なら既存の handleXxxClick を呼ぶ
@@ -2809,6 +3044,10 @@ body {
                 ? "Edge"
                 : "Vertex";
         setHoveredBoardIdDisplay(label, id);
+
+        if (shouldSuppressBoardTap()) {
+            return;
+        }
 
         if (inspectModeState.active) {
             return;
@@ -5409,10 +5648,12 @@ function renderPorts(portLayer) {
         updateMobilePanelOffsets();
         renderMobilePanelState();
         renderBoard();
+        applyBoardTransform();
         renderDevelopmentModal();
         renderRobberStealModal();
         renderPlayerSetupModal();
         requestAnimationFrame(() => {
+            applyBoardTransform();
             updateMobilePanelOffsets();
             renderMobilePanelState();
         });
@@ -5601,6 +5842,8 @@ function renderPorts(portLayer) {
         renderAll();
     };
     renderAll();
+    initializeBoardViewportControls();
+    applyBoardTransform();
     if (!saved) {
         openPlayerSetupModal(getPlayerSetupSeedConfigs());
     }
@@ -5621,6 +5864,7 @@ function renderPorts(portLayer) {
         }
     });
     window.addEventListener("resize", () => {
+        applyBoardTransform();
         updateMobilePanelOffsets();
         renderMobilePanelState();
     });
